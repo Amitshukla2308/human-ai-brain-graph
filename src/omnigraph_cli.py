@@ -389,6 +389,21 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--project-root", required=True, help="Path to ~/atelier/projects/<ProjectName>/")
     p.add_argument("--json", action="store_true")
 
+    # reflect — v0.3 (replaces Atelier's broken claude --print reflection-worker)
+    p = sub.add_parser("reflect", help="Session-end reflection: extract + 6-lens synthesis + events write")
+    p.add_argument("--session-dir", default=None, help="atelier/data/sessions/<sid>/")
+    p.add_argument("--session-json", default=None, help="Alternate: pre-normalized session JSON")
+    p.add_argument("--session-id", default=None)
+    p.add_argument("--atelier-root", default=None)
+    p.add_argument("--user-id", default=None)
+    p.add_argument("--project", default=None)
+    p.add_argument("--provider", default="atelier_pty")
+    p.add_argument("--lenses", type=int, default=6)
+    p.add_argument("--skip-synthesis", action="store_true")
+    p.add_argument("--skip-extraction", action="store_true")
+    p.add_argument("--canon-only", action="store_true")
+    p.add_argument("--also-compile", action="store_true")
+
     p = sub.add_parser("query", help="(stub) Query the indexed corpus via HR serve")
     p.add_argument("question")
 
@@ -455,6 +470,11 @@ def cmd_domain_brain(args) -> int:
     return 0
 
 
+def cmd_reflect(args) -> int:
+    from reflect import reflect as _reflect  # type: ignore
+    return _reflect(args)
+
+
 DISPATCH = {
     "status": cmd_status,
     "ingest": cmd_ingest,
@@ -469,6 +489,7 @@ DISPATCH = {
     "migrate": cmd_migrate,
     "canonicalize": cmd_canonicalize,
     "domain-brain": cmd_domain_brain,
+    "reflect": cmd_reflect,
 }
 
 
