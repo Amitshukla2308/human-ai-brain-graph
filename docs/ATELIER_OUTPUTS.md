@@ -13,28 +13,41 @@ No Python runs inside Atelier. No TypeScript runs inside OmniGraph. The contract
 All drops land inside the Atelier project tree. OmniGraph owns these subtrees and may overwrite files in them; Atelier owns everything else.
 
 ```
-atelier/projects/<ProjectName>/brain/
-├── personal/                                  ← OmniGraph-owned subtree
-│   ├── _meta.json                             drop metadata (when, schema_version, counts)
-│   ├── global_profile.json                    full Stage-2 aggregate (source of truth)
-│   ├── compiled/                              consumer-shaped projections
-│   │   ├── light_ir.xml                       system-prompt injection (load-bearing)
-│   │   ├── claude.md                          CLAUDE.md-style markdown
-│   │   ├── boot_context.json                  structured cards for onboarding / PPF
-│   │   ├── cursor.rules                       .cursorrules format
-│   │   └── gemini.md                          GEMINI_SYSTEM_MD format
-│   ├── entities/                              per-entity Vault pages (Obsidian-style)
-│   │   ├── <slug>.md                          one page per canonical target_id
-│   │   └── INDEX.md                           alphabetical index
-│   ├── events/
-│   │   ├── <YYYY-MM>.jsonl                    month-bucketed MentionEvent stream
-│   │   ├── index.json                         target_id → [(ts, file, line), ...]
-│   │   └── _meta.json
-│   └── graph/                                 (optional) HR structural signals
-│       ├── cochange.json
-│       ├── communities.json
-│       └── criticality.json
-└── _omnigraph_version.txt                     one-line: "omnigraph@<tag>" for reproducibility
+atelier/
+├── users/<atelier_user_id>/                   ← OmniGraph-owned for Personal Brain
+│   ├── .claude/                               Atelier-owned (HOME isolation)
+│   ├── data/
+│   │   └── events/<YYYY-MM>.jsonl             raw MentionEvent stream (user-scoped;
+│   │                                          each record carries `project: <slug>`)
+│   └── brain/personal/                        compiled + authored Personal Brain
+│       ├── _meta.json                         drop metadata (when, schema_version, counts)
+│       ├── global_profile.json                full Stage-2 aggregate (source of truth)
+│       ├── compiled/                          consumer-shaped projections
+│       │   ├── light_ir.xml                   system-prompt injection (load-bearing)
+│       │   ├── claude.md                      CLAUDE.md-style markdown
+│       │   ├── boot_context.json              structured cards for onboarding / PPF
+│       │   ├── cursor.rules                   .cursorrules format
+│       │   └── gemini.md                      GEMINI_SYSTEM_MD format
+│       ├── entities/                          per-entity Vault pages (Obsidian-style)
+│       │   ├── <slug>.md                      one page per canonical target_id
+│       │   └── INDEX.md                       alphabetical index
+│       ├── events/
+│       │   └── index.json                     compiled index (target_id → [(ts, file, line)])
+│       │                                      raw JSONL lives under data/events/ above
+│       └── graph/                             (optional) HR structural signals
+│           ├── cochange.json
+│           ├── communities.json
+│           └── criticality.json
+│
+└── projects/<ProjectName>/
+    ├── canvas/                                Atelier-owned; OmniGraph reads for dedup
+    │   └── nodes/<node_id>.json               NodeMeta: {raw_title, slug_canonical, canonicalized_at, …}
+    ├── domain_brain/                          shared across users in the project
+    │   ├── <kind>.md                          authored (founder or Carlsbert v2.0)
+    │   ├── <kind>.draft.md                    OmniGraph-proposed update; Atelier banners on detection
+    │   └── history/                           Atelier-owned on accept; OmniGraph never touches
+    └── brain/personal/                        LEGACY Phase A — symlink after `omnigraph migrate`
+                                               points to users/<uid>/brain/personal/
 ```
 
 Schemas for each file are below.
@@ -194,15 +207,53 @@ OmniGraph tags releases `omnigraph-YYYY-MM-DD-vN`. The tag is written to `brain/
 - Multi-founder / team sharing (sugar ladder sanitization exists in OmniGraph — `sanitize=named_stripped` etc. — but cross-founder UX is a separate design).
 - Real-time PTY streaming (for now, extraction happens at session end via reflection-worker).
 
+## CLI commands (v0.2+)
+
+All subcommands honor `--atelier-root <path> --user-id <uuid>`. When both are
+given, OmniGraph writes to the canonical user-scoped layout. When absent,
+falls back to local `pilot/` (single-user dev mode).
+
+```bash
+# Bootstrap a user's Personal Brain from their Qwen-extracted sessions.
+omnigraph pipeline \
+  --sessions pilot/qwen --sessions pilot/full \
+  --atelier-root ~/atelier --user-id <uuid>
+
+# Compile a system-prompt block into Atelier's canonical path.
+omnigraph compile light_ir --atelier-root ~/atelier --user-id <uuid>
+omnigraph compile claude_md --atelier-root ~/atelier --user-id <uuid>
+omnigraph compile boot_context --atelier-root ~/atelier --user-id <uuid>
+# (any compile subcommand auto-resolves the output path to
+#  atelier/users/<uuid>/brain/personal/compiled/<target>.<ext>)
+
+# Move legacy Phase A project-scoped brain into the user-scoped canonical location.
+# Idempotent. Leaves a symlink at the old path during transition.
+omnigraph migrate --atelier-root ~/atelier --user-id <uuid>
+omnigraph migrate --atelier-root ~/atelier --user-id <uuid> --dry-run
+
+# Post-hoc Canvas slug reconciliation (idempotent, no Qwen needed).
+# Scans atelier/projects/<P>/canvas/nodes/*.json and fills in
+# slug_canonical + canonicalized_at fields via the alias table.
+omnigraph canonicalize --atelier-root ~/atelier --project Fastbrick
+omnigraph canonicalize --atelier-root ~/atelier --project Fastbrick --dry-run
+
+# Gap audit of Atelier's project domain_brain/ (scores coverage, flags gaps).
+omnigraph domain-brain --project-root ~/atelier/projects/Fastbrick
+omnigraph domain-brain --project-root ~/atelier/projects/Fastbrick --json
+```
+
 ## How to validate the contract
 
 Once Atelier builds the backend reader + at least one consumer (Personal Brain view OR boot-prompt injection), run:
 
 ```bash
 cd ~/projects/omnigraph
-python3 src/omnigraph_cli.py pipeline --sessions pilot/qwen --sessions pilot/full
-# then manually: cp -r pilot/{events,vault} ~/atelier/projects/Fastbrick/brain/personal/
-# or extend omnigraph to write directly there (trivial — path arg)
+# End-to-end bootstrap into Atelier's canonical layout:
+python3 src/omnigraph_cli.py pipeline \
+  --sessions pilot/qwen --sessions pilot/full \
+  --atelier-root ~/atelier --user-id "$(cat ~/atelier/data/current_user_uuid 2>/dev/null || echo default)"
+python3 src/omnigraph_cli.py compile light_ir \
+  --atelier-root ~/atelier --user-id "$(cat ~/atelier/data/current_user_uuid 2>/dev/null || echo default)"
 ```
 
 Boot Atelier against Fastbrick. Confirm: (a) system prompt contains the `<user-profile>` block, (b) Personal Brain view lists the top entities, (c) no crash when `brain/personal/` is emptied.

@@ -24,6 +24,7 @@ v0.2 (next): wire per-researcher Qwen prompts + web fetch.
 """
 from .schemas import DomainBrainArtifact, ResearchGap, GapReport
 from .researcher import audit_project_domain, list_researcher_tasks
+from .writers import write_draft, draft_exists, list_pending_drafts
 
 __all__ = [
     "DomainBrainArtifact",
@@ -31,4 +32,7 @@ __all__ = [
     "GapReport",
     "audit_project_domain",
     "list_researcher_tasks",
+    "write_draft",
+    "draft_exists",
+    "list_pending_drafts",
 ]

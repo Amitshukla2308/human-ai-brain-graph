@@ -38,6 +38,30 @@ PILOT = ROOT / "pilot"
 # Ensure src/ is on path for direct-imports below.
 sys.path.insert(0, str(SRC))
 
+# ---- user/atelier-root resolution (v0.2+) ----------------------------------
+# Every subcommand that writes artifacts honors --atelier-root + --user-id.
+# When absent, legacy pilot/ paths are used — single-founder local-dev mode.
+from paths import (  # type: ignore  # noqa: E402
+    DEFAULT_USER_ID,
+    resolve_events_dir,
+    resolve_vault_dir,
+    resolve_global_profile_path,
+    resolve_compiled_dir,
+    resolve_meta_path,
+)
+
+
+def _resolve_events_out(args) -> Path:
+    if getattr(args, "atelier_root", None):
+        return resolve_events_dir(args.atelier_root, args.user_id or DEFAULT_USER_ID)
+    return Path(getattr(args, "out", None) or (PILOT / "events"))
+
+
+def _resolve_vault_out(args) -> Path:
+    if getattr(args, "atelier_root", None):
+        return resolve_vault_dir(args.atelier_root, args.user_id or DEFAULT_USER_ID)
+    return Path(getattr(args, "out", None) or (PILOT / "vault"))
+
 
 # ----------------------------------------------------------------------
 # status
@@ -121,16 +145,23 @@ def cmd_extract(args) -> int:
 def cmd_events(args) -> int:
     from build_events_stream import build as build_events  # type: ignore
     indirs = [Path(p) for p in (args.sessions or [PILOT / "qwen"])]
-    meta = build_events(indirs, Path(args.out))
-    print(f"✅ {meta['events_total']} events, {meta['distinct_targets']} targets")
+    out = _resolve_events_out(args)
+    meta = build_events(indirs, out)
+    print(f"✅ {meta['events_total']} events, {meta['distinct_targets']} targets → {out}")
     return 0
 
 
 def cmd_vault(args) -> int:
     from build_vault import build as build_vault_fn  # type: ignore
     sessions_dirs = [Path(p) for p in (args.sessions or [PILOT / "qwen"])]
-    r = build_vault_fn(Path(args.events), sessions_dirs, Path(args.out))
-    print(f"✅ {r['entities_written']} entities")
+    # Events dir: atelier-path-aware or CLI --events
+    if getattr(args, "atelier_root", None):
+        events_dir = resolve_events_dir(args.atelier_root, args.user_id or DEFAULT_USER_ID)
+    else:
+        events_dir = Path(args.events)
+    out = _resolve_vault_out(args)
+    r = build_vault_fn(events_dir, sessions_dirs, out)
+    print(f"✅ {r['entities_written']} entities → {out}")
     return 0
 
 
@@ -158,7 +189,18 @@ def cmd_compile(args) -> int:
     if args.target not in list_targets():
         print(f"unknown target {args.target!r}; have {list_targets()}", file=sys.stderr)
         return 2
-    state = VaultState.from_dir(Path(args.state))
+    # State-dir resolution: explicit --state wins; else atelier-aware lookup.
+    if args.state:
+        state_dir = Path(args.state)
+        state = VaultState.from_dir(state_dir)
+    elif getattr(args, "atelier_root", None):
+        # Read global_profile from atelier users/<uid>/brain/personal/
+        gp_path = resolve_global_profile_path(args.atelier_root, args.user_id or DEFAULT_USER_ID)
+        gp = json.loads(gp_path.read_text()) if gp_path.exists() else {}
+        state = VaultState(global_profile=gp)
+    else:
+        state = VaultState.from_dir(PILOT / "qwen")
+
     sanitize = getattr(args, "sanitize", "none") or "none"
     if sanitize not in VALID_LEVELS:
         print(f"bad --sanitize {sanitize!r}; have {VALID_LEVELS}", file=sys.stderr)
@@ -166,11 +208,26 @@ def cmd_compile(args) -> int:
     if sanitize != "none":
         state.global_profile = sanitize_global_profile(state.global_profile, sanitize)
     text = get_compiler(args.target).compile(state, max_tokens=args.max_tokens)
+
+    # Output path: --out wins, else atelier-aware compiled dir, else stdout.
+    out_path: Path | None = None
     if args.out:
-        p = Path(args.out).expanduser()
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(text)
-        print(f"✅ {args.target} → {p} ({len(text)} chars)")
+        out_path = Path(args.out).expanduser()
+    elif getattr(args, "atelier_root", None):
+        compiled = resolve_compiled_dir(args.atelier_root, args.user_id or DEFAULT_USER_ID)
+        fname = {
+            "light_ir": "light_ir.xml",
+            "claude_md": "claude.md",
+            "boot_context": "boot_context.json",
+            "cursor_rules": "cursor.rules",
+            "gemini_md": "gemini.md",
+        }.get(args.target, f"{args.target}.out")
+        out_path = compiled / fname
+
+    if out_path:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(text)
+        print(f"✅ {args.target} → {out_path} ({len(text)} chars)")
     else:
         sys.stdout.write(text)
         if not text.endswith("\n"):
@@ -226,8 +283,14 @@ def cmd_query(args) -> int:
 def cmd_pipeline(args) -> int:
     # events → vault → aggregate (on the first --sessions dir by convention).
     sessions = args.sessions or [str(PILOT / "qwen")]
-    events_dir = Path(args.events_dir)
-    vault_dir = Path(args.vault_dir)
+    # Resolve output dirs with atelier-awareness.
+    uid = args.user_id or DEFAULT_USER_ID
+    if args.atelier_root:
+        events_dir = resolve_events_dir(args.atelier_root, uid)
+        vault_dir = resolve_vault_dir(args.atelier_root, uid)
+    else:
+        events_dir = Path(args.events_dir) if args.events_dir else (PILOT / "events")
+        vault_dir = Path(args.vault_dir) if args.vault_dir else (PILOT / "vault")
     aggregate_indir = Path(sessions[0])
 
     # 1. events
@@ -270,12 +333,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("events", help="Build event stream")
     p.add_argument("--sessions", action="append")
-    p.add_argument("--out", default=str(PILOT / "events"))
+    p.add_argument("--out", default=None)
+    p.add_argument("--atelier-root", default=None)
+    p.add_argument("--user-id", default=None)
 
     p = sub.add_parser("vault", help="Build per-entity Vault")
     p.add_argument("--events", default=str(PILOT / "events"))
     p.add_argument("--sessions", action="append")
-    p.add_argument("--out", default=str(PILOT / "vault"))
+    p.add_argument("--out", default=None)
+    p.add_argument("--atelier-root", default=None)
+    p.add_argument("--user-id", default=None)
 
     p = sub.add_parser("aggregate", help="Stage-2 aggregation")
     p.add_argument("--indir", default=str(PILOT / "qwen"))
@@ -284,27 +351,108 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("compile", help="Run a projection compiler")
     p.add_argument("target")
-    p.add_argument("--state", required=True)
+    p.add_argument("--state", default=None, help="Aggregate dir with global_profile.json (or use --atelier-root)")
     p.add_argument("--out", default=None)
     p.add_argument("--max-tokens", type=int, default=None)
     p.add_argument("--sanitize", default="none",
                    help="Sugar ladder: none | named_stripped | entities_removed | aggregated")
+    p.add_argument("--atelier-root", default=None, help="~/atelier — enables user-scoped paths")
+    p.add_argument("--user-id", default=None, help="atelier_user_id (UUID); default 'default'")
 
     p = sub.add_parser("index", help="In-process cochange + communities + criticality")
     p.add_argument("--sessions", action="append")
     p.add_argument("--out", default=str(PILOT / "hr_out"))
     p.add_argument("--min-weight", type=int, default=None)
     p.add_argument("--max-targets", type=int, default=60)
+    p.add_argument("--atelier-root", default=None)
+    p.add_argument("--user-id", default=None)
+
+    # migrate — v0.2
+    p = sub.add_parser("migrate", help="Move legacy project-scoped Personal Brain into user-scoped layout")
+    p.add_argument("--atelier-root", required=True)
+    p.add_argument("--user-id", required=True)
+    p.add_argument("--project", default=None)
+    p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--no-symlink", action="store_true")
+
+    # canonicalize — v0.2
+    p = sub.add_parser("canonicalize", help="Reconcile Canvas node slugs via alias table (idempotent)")
+    p.add_argument("--atelier-root", required=True)
+    p.add_argument("--project", required=True)
+    p.add_argument("--rewrite-canvas", action="store_true", default=True,
+                   help="Write slug_canonical + canonicalized_at back into node files (default)")
+    p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--force", action="store_true")
+
+    # domain-brain audit — v0.1, expose via top-level CLI
+    p = sub.add_parser("domain-brain", help="Audit Atelier project domain_brain/ (gap report)")
+    p.add_argument("--project-root", required=True, help="Path to ~/atelier/projects/<ProjectName>/")
+    p.add_argument("--json", action="store_true")
 
     p = sub.add_parser("query", help="(stub) Query the indexed corpus via HR serve")
     p.add_argument("question")
 
     p = sub.add_parser("pipeline", help="events → vault → aggregate in one go")
     p.add_argument("--sessions", action="append")
-    p.add_argument("--events-dir", default=str(PILOT / "events"))
-    p.add_argument("--vault-dir", default=str(PILOT / "vault"))
+    p.add_argument("--events-dir", default=None)
+    p.add_argument("--vault-dir", default=None)
+    p.add_argument("--atelier-root", default=None)
+    p.add_argument("--user-id", default=None)
 
     return ap
+
+
+def cmd_migrate(args) -> int:
+    from migrate import migrate  # type: ignore
+    r = migrate(
+        atelier_root=Path(args.atelier_root),
+        user_id=args.user_id,
+        project=args.project,
+        dry_run=args.dry_run,
+        leave_symlink=not args.no_symlink,
+    )
+    tag = "[dry-run] " if args.dry_run else ""
+    print(f"{tag}target: {r['target']}")
+    print(f"{tag}migrated {len(r['projects_migrated'])}: {r['projects_migrated']}")
+    if r["skipped"]:
+        print(f"{tag}skipped: {r['skipped']}")
+    return 0
+
+
+def cmd_canonicalize(args) -> int:
+    from canonicalize_canvas import rewrite_canvas  # type: ignore
+    r = rewrite_canvas(args.atelier_root, args.project, args.dry_run, args.force)
+    if "error" in r:
+        print(f"❌ {r['error']}", file=sys.stderr)
+        return 2
+    tag = "[dry-run] " if args.dry_run else ""
+    print(f"{tag}project={r['project']}  scanned={r['scanned']}  rewritten={r['rewritten']}  skipped={r['skipped']}")
+    for c in r["changes"][:10]:
+        print(f"{tag}  {c['node_id']}: {c['raw_title']!r} → {c['new_slug']!r}")
+    return 0
+
+
+def cmd_domain_brain(args) -> int:
+    from domain_brain.researcher import audit_project_domain  # type: ignore
+    report = audit_project_domain(Path(args.project_root).expanduser())
+    if args.json:
+        print(json.dumps(report.to_json(), indent=2))
+    else:
+        print(f"project: {report.project}")
+        print(f"coverage_score: {report.coverage_score:.2f}")
+        print(f"next_action: {report.next_action}")
+        for a in report.artifacts:
+            mark = "✓" if a.exists else "✗"
+            extra = []
+            if a.stale: extra.append("stale")
+            if a.founder_authored: extra.append("founder")
+            ex = f" [{', '.join(extra)}]" if extra else ""
+            print(f"  {mark} {a.kind:22s} {a.line_count if a.exists else 'missing'}{ex}")
+        if report.gaps:
+            print(f"gaps ({len(report.gaps)}):")
+            for g in sorted(report.gaps, key=lambda x: {"blocker":0,"high":1,"medium":2,"low":3}[x.severity]):
+                print(f"  [{g.severity:7s}] {g.artifact:22s} {g.question}")
+    return 0
 
 
 DISPATCH = {
@@ -318,6 +466,9 @@ DISPATCH = {
     "index": cmd_index,
     "query": cmd_query,
     "pipeline": cmd_pipeline,
+    "migrate": cmd_migrate,
+    "canonicalize": cmd_canonicalize,
+    "domain-brain": cmd_domain_brain,
 }
 
 
