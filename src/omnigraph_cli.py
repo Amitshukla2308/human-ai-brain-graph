@@ -221,6 +221,7 @@ def cmd_compile(args) -> int:
             "boot_context": "boot_context.json",
             "cursor_rules": "cursor.rules",
             "gemini_md": "gemini.md",
+            "brain_view": "brain_view.json",
         }.get(args.target, f"{args.target}.out")
         out_path = compiled / fname
 

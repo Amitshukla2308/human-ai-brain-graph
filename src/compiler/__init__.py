@@ -32,7 +32,7 @@ def list_targets() -> list[str]:
 
 
 def _load_builtin_compilers() -> None:
-    from . import light_ir, claude_md, boot_context, cursor_rules, gemini_md  # noqa: F401
+    from . import light_ir, claude_md, boot_context, cursor_rules, gemini_md, brain_view  # noqa: F401
 
 
 __all__ = [

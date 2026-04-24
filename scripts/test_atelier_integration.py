@@ -278,7 +278,7 @@ def _test_compile(atelier: Path, chk: Checker) -> None:
         "drift_recurrence_by_trigger": [],
     }))
 
-    for target in ("light_ir", "claude_md", "boot_context"):
+    for target in ("light_ir", "claude_md", "boot_context", "brain_view"):
         r = _run(
             [sys.executable, str(SRC / "omnigraph_cli.py"), "compile",
              target,
@@ -289,7 +289,7 @@ def _test_compile(atelier: Path, chk: Checker) -> None:
         chk.check(f"compile {target} exits 0", r.returncode == 0, r.stderr[:120])
         # Verify landed in canonical compiled/ dir
         compiled = atelier / "data" / "users" / TEST_USER_ID / "brain" / "personal" / "compiled"
-        ext_map = {"light_ir": "light_ir.xml", "claude_md": "claude.md", "boot_context": "boot_context.json"}
+        ext_map = {"light_ir": "light_ir.xml", "claude_md": "claude.md", "boot_context": "boot_context.json", "brain_view": "brain_view.json"}
         out_path = compiled / ext_map[target]
         chk.check(f"compile {target} landed at compiled/{ext_map[target]}", out_path.exists(),
                   str(out_path))
