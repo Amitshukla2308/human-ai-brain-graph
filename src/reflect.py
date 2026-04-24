@@ -286,21 +286,37 @@ class _QwenUnreachable(RuntimeError):
 
 
 def _run_lens_synthesis(extracted: dict) -> dict[str, str]:
-    """Run each of the 6 lens prompts and return {lens_name: markdown_body}."""
-    from qwen_pipeline import qwen_call  # type: ignore  # reuses the single LM-Studio client
+    """Run each of the 6 lens prompts and return {lens_name: markdown_body}.
+
+    Qwen 3.6 is a thinking model: it spends a large chunk of max_tokens on
+    internal reasoning before emitting the output. Budgeting 2048 tokens
+    total caused 5/6 lenses to return empty content on the pilot Fastbrick
+    session (thinking-overrun, finish_reason=length). v0.4.1 fix: start at
+    8192, retry once at 16384 on length-overrun with empty content.
+    """
+    from qwen_pipeline import qwen_call  # type: ignore
+
+    LENS_BASE_TOKENS = 8192
+    LENS_RETRY_TOKENS = 16384
 
     brief = render_session_brief(extracted)
     out: dict[str, str] = {}
     for lens in LENSES:
         system, user = lens_prompt(lens, brief)
         try:
-            resp = qwen_call(system, user, max_tokens=2048)
+            resp = qwen_call(system, user, max_tokens=LENS_BASE_TOKENS)
+            content = (resp.get("content") or "").strip()
+            # Thinking-overrun retry: empty content + finish_reason=length means
+            # the model burned all budget on reasoning before emitting output.
+            if not content and resp.get("finish_reason") == "length":
+                resp = qwen_call(system, user, max_tokens=LENS_RETRY_TOKENS)
+                content = (resp.get("content") or "").strip()
         except Exception as e:
             msg = str(e).lower()
             if "connection" in msg or "timeout" in msg or "refused" in msg or "unreachable" in msg:
                 raise _QwenUnreachable(str(e))
             raise
-        content = (resp.get("content") or "").strip()
+
         if not content:
             content = f"### {lens.title()}\n\n_(lens produced no content — extraction may be thin)_\n"
         out[lens] = content
