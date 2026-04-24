@@ -393,6 +393,8 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("reflect", help="Session-end reflection: extract + 6-lens synthesis + events write")
     p.add_argument("--session-dir", default=None, help="atelier/data/sessions/<sid>/")
     p.add_argument("--session-json", default=None, help="Alternate: pre-normalized session JSON")
+    p.add_argument("--claude-jsonl", default=None,
+                   help="Claude Code per-session JSONL (e.g. ~/.claude/projects/<slug>/<sid>.jsonl)")
     p.add_argument("--session-id", default=None)
     p.add_argument("--atelier-root", default=None)
     p.add_argument("--user-id", default=None)

@@ -147,15 +147,75 @@ def _parse_raw_pty_log(raw_log_path: Path, session_id: str, provider: str = "ate
     }
 
 
-def _load_session(args) -> dict:
-    """Load the normalized session dict via one of three paths:
+def _load_from_claude_jsonl(jsonl_path: Path, sid: str) -> dict:
+    """Normalize a Claude Code per-session JSONL through the existing adapter.
 
-      1. --session-json <path>              explicit normalized JSON
-      2. <session_dir>/session.json         Atelier's structured output if present
-      3. <session_dir>/raw.log              fall back to raw PTY parser
+    Claude Code writes ~/.claude/projects/<slugified-cwd>/<sid>.jsonl with
+    one line per turn (user / assistant / system). Our ClaudeCodeAdapter
+    already handles this shape; we just need to read the single file.
+    """
+    import io
+    from sources.base import flatten_content, coerce_ts  # type: ignore
+
+    if not jsonl_path.exists():
+        raise ValueError(f"--claude-jsonl not found: {jsonl_path}")
+
+    turns: list[dict] = []
+    idx = 0
+    for line in jsonl_path.open(errors="replace"):
+        try:
+            o = json.loads(line)
+        except Exception:
+            continue
+        t = o.get("type")
+        if t not in ("user", "assistant"):
+            continue
+        msg = o.get("message", {}) or {}
+        fc = flatten_content(msg.get("content", ""))
+        if not (fc["text"] or fc["thinking"] or fc["tool_calls"]):
+            continue
+        turns.append({
+            "index": idx,
+            "role": msg.get("role", t),
+            "timestamp": coerce_ts(o.get("timestamp")),
+            "text": fc["text"],
+            "thinking": fc["thinking"],
+            "tool_calls": fc["tool_calls"],
+        })
+        idx += 1
+
+    if not turns:
+        raise ValueError(f"zero usable turns in {jsonl_path}")
+
+    return {
+        "session_id": sid,
+        "provider": "claude_code",
+        "source_path": str(jsonl_path),
+        "input_type": "dialog",
+        "turns": turns,
+    }
+
+
+def _load_session(args) -> dict:
+    """Load the normalized session dict via one of four paths (in priority order):
+
+      1. --claude-jsonl <path>              Claude Code per-session JSONL (preferred;
+                                            ANSI-free; normalized via existing adapter)
+      2. --session-json <path>              explicit normalized session JSON
+      3. <session_dir>/session.json         Atelier's structured output if present
+      4. <session_dir>/raw.log              last resort: ANSI-strip PTY parser
 
     Raises ValueError on malformed/empty input.
     """
+    sid_hint = args.session_id
+    if not sid_hint and args.session_dir:
+        sid_hint = Path(args.session_dir).name
+    elif not sid_hint and args.claude_jsonl:
+        sid_hint = Path(args.claude_jsonl).stem
+
+    if getattr(args, "claude_jsonl", None):
+        return _load_from_claude_jsonl(Path(args.claude_jsonl), sid_hint or "unknown")
+
     if args.session_json:
         p = Path(args.session_json)
         if not p.exists():
@@ -165,11 +225,14 @@ def _load_session(args) -> dict:
         except Exception as e:
             raise ValueError(f"--session-json invalid: {e}")
 
+    if not args.session_dir:
+        raise ValueError("one of --claude-jsonl, --session-json, or --session-dir is required")
+
     sess_dir = Path(args.session_dir)
     if not sess_dir.exists():
         raise ValueError(f"--session-dir not found: {sess_dir}")
 
-    sid = args.session_id or sess_dir.name
+    sid = sid_hint or sess_dir.name
     structured = sess_dir / "session.json"
     if structured.exists():
         try:
@@ -447,6 +510,8 @@ def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description="OmniGraph reflection backend for Atelier")
     ap.add_argument("--session-dir", default=None, help="atelier/data/sessions/<sid>/")
     ap.add_argument("--session-json", default=None, help="Alternate: pre-normalized session JSON")
+    ap.add_argument("--claude-jsonl", default=None,
+                    help="Claude Code per-session JSONL (e.g. ~/.claude/projects/<slug>/<sid>.jsonl)")
     ap.add_argument("--session-id", default=None, help="Override sid (else derived from dir/name)")
     ap.add_argument("--atelier-root", default=None)
     ap.add_argument("--user-id", default=None)
@@ -464,8 +529,8 @@ def main(argv: list[str]) -> int:
     if args.skip_synthesis:
         args.lenses = 0
 
-    if not args.session_dir and not args.session_json:
-        return _fail("args", "one of --session-dir or --session-json is required", EXIT_SESSION_MALFORMED)
+    if not (args.session_dir or args.session_json or args.claude_jsonl):
+        return _fail("args", "one of --session-dir, --session-json, or --claude-jsonl is required", EXIT_SESSION_MALFORMED)
 
     return reflect(args)
 
