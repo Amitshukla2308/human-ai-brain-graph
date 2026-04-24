@@ -1,0 +1,37 @@
+# Local data — per user instruction: code to git, data local only.
+pilot/
+research/output/
+*.jsonl
+*.json.gz
+
+# Secrets / envs
+.env
+.env.*
+!.env.example
+
+# Python build / cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+build/
+dist/
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+*.orig
+
+# Large intermediate artifacts
+*.pt
+*.bin
+*.safetensors
