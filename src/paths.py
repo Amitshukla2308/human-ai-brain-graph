@@ -23,8 +23,13 @@ DEFAULT_USER_ID = "default"
 # ----------------------------------------------------------------------
 
 def atelier_user_root(atelier_root: Path | str, user_id: str) -> Path:
-    """~/atelier/users/<uid>/"""
-    return Path(atelier_root) / "users" / (user_id or DEFAULT_USER_ID)
+    """~/atelier/data/users/<uid>/
+
+    Canonical user-scoped root per Atelier's live HOME-isolation layout
+    (PTY spawns with HOME=data/users/<uuid>/). All user-scoped subtrees
+    — .claude/, data/events/, brain/personal/ — live underneath.
+    """
+    return Path(atelier_root) / "data" / "users" / (user_id or DEFAULT_USER_ID)
 
 
 def atelier_events_dir(atelier_root: Path | str, user_id: str) -> Path:

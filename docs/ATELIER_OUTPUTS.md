@@ -14,12 +14,16 @@ All drops land inside the Atelier project tree. OmniGraph owns these subtrees an
 
 ```
 atelier/
-├── users/<atelier_user_id>/                   ← OmniGraph-owned for Personal Brain
-│   ├── .claude/                               Atelier-owned (HOME isolation)
-│   ├── data/
-│   │   └── events/<YYYY-MM>.jsonl             raw MentionEvent stream (user-scoped;
-│   │                                          each record carries `project: <slug>`)
-│   └── brain/personal/                        compiled + authored Personal Brain
+├── data/                                      Atelier runtime data root
+│   ├── atelier.db                             SQLite (users, orgs, sessions, ...)
+│   ├── sessions/<sid>/                        Atelier-owned PTY transcripts
+│   │   └── raw.log                            (OmniGraph reads for reflect)
+│   └── users/<atelier_user_id>/               ← canonical user root (PTY HOME target)
+│       ├── .claude/                           Atelier-owned (HOME isolation)
+│       ├── data/
+│       │   └── events/<YYYY-MM>.jsonl         raw MentionEvent stream (user-scoped;
+│       │                                      each record carries `project: <slug>`)
+│       └── brain/personal/                    compiled + authored Personal Brain
 │       ├── _meta.json                         drop metadata (when, schema_version, counts)
 │       ├── global_profile.json                full Stage-2 aggregate (source of truth)
 │       ├── compiled/                          consumer-shaped projections
@@ -28,26 +32,27 @@ atelier/
 │       │   ├── boot_context.json              structured cards for onboarding / PPF
 │       │   ├── cursor.rules                   .cursorrules format
 │       │   └── gemini.md                      GEMINI_SYSTEM_MD format
-│       ├── entities/                          per-entity Vault pages (Obsidian-style)
-│       │   ├── <slug>.md                      one page per canonical target_id
-│       │   └── INDEX.md                       alphabetical index
-│       ├── events/
-│       │   └── index.json                     compiled index (target_id → [(ts, file, line)])
-│       │                                      raw JSONL lives under data/events/ above
-│       └── graph/                             (optional) HR structural signals
-│           ├── cochange.json
-│           ├── communities.json
-│           └── criticality.json
+│           ├── entities/                      per-entity Vault pages (Obsidian-style)
+│           │   ├── <slug>.md                  one page per canonical target_id
+│           │   └── INDEX.md                   alphabetical index
+│           ├── events/
+│           │   └── index.json                 compiled index (target_id → [(ts, file, line)])
+│           │                                  raw JSONL lives under data/events/ above
+│           └── graph/                         (optional) HR structural signals
+│               ├── cochange.json
+│               ├── communities.json
+│               └── criticality.json
 │
 └── projects/<ProjectName>/
     ├── canvas/                                Atelier-owned; OmniGraph reads for dedup
     │   └── nodes/<node_id>.json               NodeMeta: {raw_title, slug_canonical, canonicalized_at, …}
+    ├── sessions/<sid>.md                      6-lens reflection (OmniGraph writes)
     ├── domain_brain/                          shared across users in the project
     │   ├── <kind>.md                          authored (founder or Carlsbert v2.0)
     │   ├── <kind>.draft.md                    OmniGraph-proposed update; Atelier banners on detection
     │   └── history/                           Atelier-owned on accept; OmniGraph never touches
     └── brain/personal/                        LEGACY Phase A — symlink after `omnigraph migrate`
-                                               points to users/<uid>/brain/personal/
+                                               points to data/users/<uid>/brain/personal/
 ```
 
 Schemas for each file are below.
